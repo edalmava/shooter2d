@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shooter 2D (Firebase Placeholder + Local)</title>
+    <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+
+    <style>
+        /* Estilos CSS (sin cambios) */
+        body { display: flex; flex-direction: column; justify-content: center; align-items: center; min-height: 100vh; background-color: #1a1a1a; margin: 0; font-family: 'Press Start 2P', cursive; color: #fff; overflow: hidden; }
+        h1 { color: #0f0; text-shadow: 0 0 5px #0f0; margin-bottom: 15px; font-size: 1.8em; text-align: center;}
+        canvas { border: 3px solid #0f0; background-color: #000; display: block; max-width: 95%; aspect-ratio: 16 / 9; box-shadow: 0 0 15px #0f0; border-radius: 8px; margin-bottom: 10px; }
+        .info, .stats { margin-top: 10px; text-align: center; font-size: 0.8em; line-height: 1.4; }
+        .stats h2 { font-size: 1em; margin-bottom: 5px; color: #0f0; text-shadow: 0 0 3px #0f0; }
+        .stats span { color: #ff0; }
+        .controls { margin-top: 15px; text-align: center; }
+        .controls p { font-size: 0.7em; margin-top: 5px; }
+        button { font-family: 'Press Start 2P', cursive; background-color: #333; color: #0f0; border: 2px solid #0f0; padding: 8px 15px; margin: 5px; cursor: pointer; transition: background-color 0.3s, box-shadow 0.3s; border-radius: 5px; box-shadow: 0 0 5px #0f0; font-size: 0.9em; }
+        button:hover { background-color: #444; box-shadow: 0 0 10px #0f0, 0 0 15px #0f0; }
+        button:active { background-color: #555; }
+        .message-box { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background-color: rgba(0, 0, 0, 0.85); color: #0f0; padding: 25px; border: 3px solid #0f0; border-radius: 10px; text-align: center; display: none; z-index: 10; box-shadow: 0 0 15px #0f0; max-width: 80%; }
+        .message-box h2 { margin-top: 0; font-size: 1.3em; }
+        .message-box p { margin-bottom: 15px; font-size: 0.9em; }
+        .message-box button { font-size: 0.8em; padding: 6px 12px; }
+        .storage-note { font-size: 0.6em; color: #aaa; margin-top: 5px; text-align: center; }
+    </style>
+</head>
+<body>
+
+    <h1>Shooter 2D: ¡Con Estadísticas!</h1>
+    <p class="storage-note">(Guardado: Firebase Simulado + LocalStorage)</p>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <div class="info">
+        Puntuación: <span id="score">0</span> | Vidas: <span id="lives">3</span>
+    </div>
+
+    <div class="stats">
+        <h2>Estadísticas</h2>
+        Máx. Puntuación: <span id="highScore">0</span> | Partidas Jugadas: <span id="gamesPlayed">0</span> | Enemigos Destruidos: <span id="enemiesDestroyed">0</span>
+    </div>
+
+    <div class="controls">
+        <button id="startButton">Iniciar Juego</button>
+        <p>Controles: Flechas para mover, Espacio para disparar</p>
+    </div>
+
+    <div id="messageBox" class="message-box">
+        <h2 id="messageTitle">¡Bienvenido!</h2>
+        <p id="messageText">Presiona 'Iniciar Juego' para comenzar.</p>
+        <button id="closeMessageButton">Cerrar</button>
+    </div>
+
+    <script>
+        // --- Elementos del DOM (sin cambios) ---
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreElement = document.getElementById('score');
+        const livesElement = document.getElementById('lives');
+        const startButton = document.getElementById('startButton');
+        const messageBox = document.getElementById('messageBox');
+        const messageTitle = document.getElementById('messageTitle');
+        const messageText = document.getElementById('messageText');
+        const closeMessageButton = document.getElementById('closeMessageButton');
+        const highScoreElement = document.getElementById('highScore');
+        const gamesPlayedElement = document.getElementById('gamesPlayed');
+        const enemiesDestroyedElement = document.getElementById('enemiesDestroyed');
+
+        // --- Variables del Juego (sin cambios) ---
+        let player, bullets, enemies, keys, score, lives, enemySpawnInterval, gameRunning;
+        let lastTime = 0;
+        const enemySpeed = 1;
+        const playerSpeed = 5;
+        const bulletSpeed = 7;
+        const enemySpawnRate = 1500;
+
+        // --- Variables de Estadísticas (en memoria) ---
+        let stats = {
+            highScore: 0,
+            gamesPlayed: 0,
+            enemiesDestroyed: 0
+        };
+
+        // --- Efectos de Sonido (Tone.js - sin cambios) ---
+        const shootSound = new Tone.Synth({ oscillator: { type: 'square' }, envelope: { attack: 0.01, decay: 0.1, sustain: 0, release: 0.1 } }).toDestination();
+        shootSound.volume.value = -15;
+        const hitSound = new Tone.Synth({ oscillator: { type: 'triangle' }, envelope: { attack: 0.01, decay: 0.2, sustain: 0, release: 0.1 } }).toDestination();
+        hitSound.volume.value = -10;
+        const explosionSound = new Tone.NoiseSynth({ noise: { type: 'white' }, envelope: { attack: 0.01, decay: 0.3, sustain: 0, release: 0.2 } }).toDestination();
+        explosionSound.volume.value = -10;
+        const gameOverSound = new Tone.Synth({ oscillator: { type: 'sine' }, envelope: { attack: 0.1, decay: 0.5, sustain: 0, release: 0.5 } }).toDestination();
+        gameOverSound.volume.value = -5;
+
+        // --- Placeholder Firebase Functions (sin cambios en la simulación interna) ---
+        async function _loadStatsFromFirebase_placeholder() {
+            console.log("Placeholder: Intentando cargar desde Firebase...");
+            // --- CÓDIGO REAL DE FIREBASE IRÍA AQUÍ ---
+            // Ejemplo: const snapshot = await database.ref('gameStats/user123').once('value');
+            // if (snapshot.exists()) return snapshot.val(); else return null;
+             await new Promise(resolve => setTimeout(resolve, 50)); // Simular retraso
+             // Simular fallo ocasional o no encontrar datos para probar fallback
+             if (Math.random() < 0.1) { // Simular fallo 10% de las veces
+                 console.warn("Placeholder: Error simulado al cargar de Firebase.");
+                 throw new Error("Simulated Firebase load error");
+             }
+             // Simular no encontrar datos a veces
+             // En un caso real, Firebase devolvería null si no hay datos.
+             // Para la simulación, devolvemos null para forzar el uso de localStorage a veces.
+             // Devolvemos los datos en memoria solo si ya se han inicializado (para que no siempre falle la carga inicial)
+             const shouldReturnData = stats.gamesPlayed > 0 && Math.random() < 0.7; // 70% chance de "encontrar" datos si ya se jugó
+             if (shouldReturnData) {
+                 console.log("Placeholder: Datos simulados encontrados en Firebase.");
+                 return { ...stats }; // Devuelve copia de datos en memoria
+             } else {
+                 console.log("Placeholder: No se encontraron datos simulados en Firebase.");
+                 return null; // Simula que no hay datos en Firebase
+             }
+        }
+
+        async function _saveStatsToFirebase_placeholder(currentStats) {
+            console.log("Placeholder: Intentando guardar en Firebase:", currentStats);
+            // --- CÓDIGO REAL DE FIREBASE IRÍA AQUÍ ---
+            // Ejemplo: await database.ref('gameStats/user123').set(currentStats);
+            await new Promise(resolve => setTimeout(resolve, 50)); // Simular retraso
+             if (Math.random() < 0.1) { // Simular fallo 10% de las veces
+                 console.warn("Placeholder: Error simulado al guardar en Firebase.");
+                 throw new Error("Simulated Firebase save error");
+             }
+            console.log("Placeholder: Guardado simulado en Firebase completado.");
+        }
+
+
+        // --- Funciones de Carga y Guardado (Combinadas) ---
+
+        /**
+         * Carga estadísticas: Intenta Firebase, luego LocalStorage, luego default.
+         */
+        async function loadStats() {
+            let loadedFrom = "default";
+            let loadedData = null;
+
+            // 1. Intentar cargar desde Firebase (simulado)
+            try {
+                loadedData = await _loadStatsFromFirebase_placeholder();
+                if (loadedData) {
+                    loadedFrom = "Firebase (simulado)";
+                }
+            } catch (error) {
+                console.error("Error al intentar cargar desde Firebase (simulado), intentando LocalStorage:", error.message);
+            }
+
+            // 2. Si Firebase falló o no devolvió datos, intentar LocalStorage
+            if (!loadedData) {
+                try {
+                    const localDataString = localStorage.getItem('shooterStatsLocal');
+                    if (localDataString) {
+                        loadedData = JSON.parse(localDataString);
+                        loadedFrom = "LocalStorage";
+                    }
+                } catch (error) {
+                    console.error("Error al cargar desde LocalStorage:", error);
+                    // Continuar para usar valores por defecto
+                }
+            }
+
+            // 3. Usar datos cargados o valores por defecto
+            if (loadedData) {
+                // Asegurarse de que todas las propiedades esperadas existan
+                stats = {
+                     highScore: parseInt(loadedData.highScore || '0'),
+                     gamesPlayed: parseInt(loadedData.gamesPlayed || '0'),
+                     enemiesDestroyed: parseInt(loadedData.enemiesDestroyed || '0')
+                 };
+            } else {
+                // Usar valores por defecto si todo falló
+                stats = { highScore: 0, gamesPlayed: 0, enemiesDestroyed: 0 };
+            }
+
+            console.log(`Estadísticas cargadas desde: ${loadedFrom}`, stats);
+            updateStatsDisplay();
+        }
+
+        /**
+         * Guarda estadísticas: Intenta Firebase y siempre guarda en LocalStorage.
+         * @param {object} currentStats - Las estadísticas a guardar.
+         */
+        async function saveStats(currentStats) {
+            // 1. Intentar guardar en Firebase (simulado)
+            try {
+                await _saveStatsToFirebase_placeholder(currentStats);
+            } catch (error) {
+                console.error("Error al intentar guardar en Firebase (simulado):", error.message);
+                // Continuar para guardar localmente de todas formas
+            }
+
+            // 2. Guardar siempre en LocalStorage como respaldo/copia
+            try {
+                localStorage.setItem('shooterStatsLocal', JSON.stringify(currentStats));
+                console.log("Estadísticas guardadas en LocalStorage:", currentStats);
+            } catch (error) {
+                console.error("Error guardando en LocalStorage:", error);
+            }
+
+             // Asegurar que el estado en memoria esté sincronizado
+             stats = { ...currentStats };
+             updateStatsDisplay(); // Actualizar la pantalla después de guardar
+        }
+
+        // --- Actualizar Display (sin cambios) ---
+        function updateStatsDisplay() {
+            highScoreElement.textContent = stats.highScore;
+            gamesPlayedElement.textContent = stats.gamesPlayed;
+            enemiesDestroyedElement.textContent = stats.enemiesDestroyed;
+        }
+
+        // --- Lógica del Juego (Adaptada para usar saveStats) ---
+        function resizeCanvas() { /* ... (sin cambios) ... */
+             const aspectRatio = 16 / 9; const parentWidth = canvas.parentElement.clientWidth * 0.9; const parentHeight = window.innerHeight * 0.55; let newWidth = parentWidth; let newHeight = newWidth / aspectRatio; if (newHeight > parentHeight) { newHeight = parentHeight; newWidth = newHeight * aspectRatio; } canvas.width = newWidth; canvas.height = newHeight; if (!gameRunning) drawInitialScreen();
+         }
+        function drawInitialScreen() { /* ... (sin cambios) ... */
+             ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.fillStyle = '#0f0'; ctx.font = `${Math.min(canvas.width / 20, 20)}px 'Press Start 2P'`; ctx.textAlign = 'center'; ctx.fillText('Presiona "Iniciar Juego"', canvas.width / 2, canvas.height / 2);
+        }
+
+        async function initGame() {
+            if (gameRunning) {
+                await gameOver();
+            }
+
+            player = { x: canvas.width / 2 - 15, y: canvas.height - 40, width: 30, height: 30, color: '#0f0' };
+            bullets = []; enemies = []; keys = {}; score = 0; lives = 3;
+            scoreElement.textContent = score; livesElement.textContent = lives;
+            gameRunning = true; lastTime = 0;
+
+            // Incrementar partidas jugadas y guardar
+            const newStats = { ...stats, gamesPlayed: stats.gamesPlayed + 1 };
+            await saveStats(newStats); // Llama a la función unificada
+
+            if (enemySpawnInterval) clearInterval(enemySpawnInterval);
+            enemySpawnInterval = setInterval(spawnEnemy, enemySpawnRate);
+
+            requestAnimationFrame(gameLoop);
+            startButton.textContent = "Reiniciar Juego";
+            hideMessage();
+            Tone.start();
+        }
+
+        function drawPlayer() { /* ... (sin cambios) ... */ ctx.fillStyle = player.color; ctx.beginPath(); ctx.moveTo(player.x + player.width / 2, player.y); ctx.lineTo(player.x, player.y + player.height); ctx.lineTo(player.x + player.width, player.y + player.height); ctx.closePath(); ctx.fill(); }
+        function drawBullets() { /* ... (sin cambios) ... */ ctx.fillStyle = '#ff0'; bullets.forEach(bullet => { ctx.fillRect(bullet.x, bullet.y, bullet.width, bullet.height); }); }
+        function drawEnemies() { /* ... (sin cambios) ... */ ctx.fillStyle = '#f00'; enemies.forEach(enemy => { ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height); }); }
+        function updatePlayer(deltaTime) { /* ... (sin cambios) ... */ const moveDistance = playerSpeed * (deltaTime / (1000/60)); if (keys['ArrowLeft'] && player.x > 0) player.x -= moveDistance; if (keys['ArrowRight'] && player.x < canvas.width - player.width) player.x += moveDistance; if (keys['ArrowUp'] && player.y > 0) player.y -= moveDistance; if (keys['ArrowDown'] && player.y < canvas.height - player.height) player.y += moveDistance; }
+        function updateBullets(deltaTime) { /* ... (sin cambios) ... */ const moveDistance = bulletSpeed * (deltaTime / (1000/60)); bullets.forEach((bullet, index) => { bullet.y -= moveDistance; if (bullet.y + bullet.height < 0) bullets.splice(index, 1); }); }
+        function updateEnemies(deltaTime) { /* ... (sin cambios) ... */ const moveDistance = enemySpeed * (deltaTime / (1000/60)); enemies.forEach((enemy, index) => { enemy.y += moveDistance; if (enemy.y > canvas.height) { enemies.splice(index, 1); if (gameRunning) { lives--; livesElement.textContent = lives; if (lives <= 0) gameOver(); } } }); } // gameOver es async
+        function spawnEnemy() { /* ... (sin cambios) ... */ if (!gameRunning) return; const size = 25; const x = Math.random() * (canvas.width - size); enemies.push({ x: x, y: -size, width: size, height: size }); }
+        function shoot() { /* ... (sin cambios) ... */ if (Tone.context.state !== 'running') Tone.start(); bullets.push({ x: player.x + player.width / 2 - 2.5, y: player.y, width: 5, height: 10 }); shootSound.triggerAttackRelease('C4', '16n'); }
+
+        async function checkCollisions() {
+            let statsNeedSave = false;
+            const currentStats = { ...stats }; // Copia para modificar antes de guardar
+
+            // Bullet-Enemy Collisions
+            for (let bulletIndex = bullets.length - 1; bulletIndex >= 0; bulletIndex--) {
+                const bullet = bullets[bulletIndex];
+                for (let enemyIndex = enemies.length - 1; enemyIndex >= 0; enemyIndex--) {
+                    const enemy = enemies[enemyIndex];
+                    if (bullet.x < enemy.x + enemy.width && bullet.x + bullet.width > enemy.x &&
+                        bullet.y < enemy.y + enemy.height && bullet.y + bullet.height > enemy.y) {
+                        hitSound.triggerAttackRelease('E5', '8n');
+                        explosionSound.triggerAttackRelease("2n");
+                        enemies.splice(enemyIndex, 1);
+                        bullets.splice(bulletIndex, 1);
+                        score += 10;
+                        scoreElement.textContent = score;
+                        currentStats.enemiesDestroyed++; // Modificar copia
+                        statsNeedSave = true;
+                        break;
+                    }
+                }
+            }
+
+            // Player-Enemy Collisions
+            for (let enemyIndex = enemies.length - 1; enemyIndex >= 0; enemyIndex--) {
+                const enemy = enemies[enemyIndex];
+                if (player && player.x < enemy.x + enemy.width && player.x + player.width > enemy.x &&
+                    player.y < enemy.y + enemy.height && player.y + player.height > enemy.y) {
+                    explosionSound.triggerAttackRelease("1n");
+                    enemies.splice(enemyIndex, 1);
+                    lives--;
+                    livesElement.textContent = lives;
+                    if (lives <= 0) {
+                        await gameOver(); // Esperar a que termine el juego
+                        return; // Salir de checkCollisions si el juego terminó
+                    } else {
+                        player.color = '#f00';
+                        setTimeout(() => { if (player) player.color = '#0f0'; }, 200);
+                    }
+                }
+            }
+
+            // Guardar estadísticas si cambiaron
+            if (statsNeedSave) {
+                await saveStats(currentStats); // Llama a la función unificada con los stats actualizados
+            }
+        }
+
+        async function gameOver() {
+            if (!gameRunning) return;
+            gameRunning = false;
+            clearInterval(enemySpawnInterval);
+            gameOverSound.triggerAttackRelease('C3', '1n');
+
+            const finalStats = { ...stats }; // Copia para modificar
+            let statsChanged = false;
+            if (score > finalStats.highScore) {
+                finalStats.highScore = score;
+                statsChanged = true;
+            }
+
+            // Guardar estadísticas finales si hubo cambios
+            if (statsChanged) {
+                await saveStats(finalStats); // Llama a la función unificada
+            } else {
+                 // Asegurarse de que el display se actualice incluso si no hubo cambio de high score
+                 updateStatsDisplay();
+            }
+
+
+            showMessage("¡Juego Terminado!", `Puntuación Final: ${score}. Máxima Puntuación: ${stats.highScore}`);
+            startButton.textContent = "Iniciar Juego";
+        }
+
+        function showMessage(title, text) { /* ... (sin cambios) ... */ messageTitle.textContent = title; messageText.textContent = text; messageBox.style.display = 'block'; }
+        function hideMessage() { /* ... (sin cambios) ... */ messageBox.style.display = 'none'; }
+
+        function gameLoop(timestamp) { // gameLoop en sí no necesita ser async
+            if (!gameRunning) { draw(); return; }
+            const deltaTime = timestamp - lastTime; lastTime = timestamp;
+
+            ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            updatePlayer(deltaTime);
+            updateBullets(deltaTime);
+            updateEnemies(deltaTime);
+            checkCollisions(); // checkCollisions es async, pero no necesitamos esperar aquí
+
+            if(player) drawPlayer();
+            drawBullets();
+            drawEnemies();
+
+            requestAnimationFrame(gameLoop);
+        }
+        function draw() { /* ... (sin cambios) ... */ ctx.fillStyle = '#000'; ctx.fillRect(0, 0, canvas.width, canvas.height); if(player) drawPlayer(); drawBullets(); drawEnemies(); }
+
+        // --- Event Listeners (sin cambios) ---
+        window.addEventListener('keydown', (e) => { keys[e.key] = true; if (e.key === ' ' && gameRunning) { e.preventDefault(); shoot(); } });
+        window.addEventListener('keyup', (e) => { keys[e.key] = false; });
+        startButton.addEventListener('click', initGame); // initGame es async
+        closeMessageButton.addEventListener('click', hideMessage);
+        window.addEventListener('resize', resizeCanvas);
+
+        // --- Initial Setup (Async IIFE) ---
+        (async () => {
+            console.log("Iniciando carga de estadísticas...");
+            await loadStats(); // Carga combinada al inicio
+            resizeCanvas();
+            showMessage("¡Bienvenido!", "Usa las flechas para moverte y Espacio para disparar. ¡Presiona 'Iniciar Juego'!");
+        })();
+
+    </script>
+
+</body>
+</html>
